@@ -1,0 +1,6 @@
+{
+  "tier": "qa",
+  "context": "qa02",
+  "host": "qa02.surshongi.com",
+  "tag": "0.1"
+}

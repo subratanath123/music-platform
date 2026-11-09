@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      environment: qa
+    includeSelectors: false
+
+images:
+  - name: music-platform
+    newName: qa/music-platform
+    newTag: "0.1"
+
+patches:
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: music-platform
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3

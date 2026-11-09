@@ -1,0 +1,67 @@
+# ==============================================================================
+# PPS (Pre-Production) Environment Argo CD ApplicationSet (Git File Generator Pattern)
+#
+# Apply ONCE to the PPS Argo CD instance:
+#   kubectl apply -n argocd -f k8s/argocd/pps-applicationset.yaml
+#
+# Automatically discovers every k8s/environments/pps/*.json file (pps01, ..., pps0n).
+# You never need to edit this file again — just add/edit JSON files in k8s/environments/pps/!
+# ==============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: music-platform-pps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/YOUR_ORG/music-platform.git
+        revision: main
+        files:
+          - path: "k8s/environments/pps/*.json"
+
+  template:
+    metadata:
+      name: "music-platform-{{.context}}"
+      labels:
+        environment: pps
+        context: "{{.context}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/YOUR_ORG/music-platform.git
+        targetRevision: main
+        path: k8s/overlays/pps
+        kustomize:
+          images:
+            - "music-platform=pps/music-platform:{{.tag}}"
+          patches:
+            - target:
+                kind: ExternalSecret
+                name: music-platform-env
+              patch: |-
+                - op: replace
+                  path: /spec/dataFrom/0/extract/key
+                  value: music-platform-{{.context}}
+            - target:
+                kind: Ingress
+                name: music-platform
+              patch: |-
+                - op: replace
+                  path: /spec/tls/0/hosts/0
+                  value: {{.host}}
+                - op: replace
+                  path: /spec/rules/0/host
+                  value: {{.host}}
+      destination:
+        # In-cluster: deploys to the PPS GKE cluster where this PPS Argo CD runs
+        server: https://kubernetes.default.svc
+        namespace: "music-{{.context}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

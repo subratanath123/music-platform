@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SurShongi field book</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,650&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="nav" id="nav">
+      <div class="brand">
+        <p class="brand-kicker">SurShongi</p>
+        <h1>Field book</h1>
+        <p class="brand-note">Theory, recipes, and what breaks. Written against the files in this repo.</p>
+      </div>
+      <label class="search">
+        <span>Find a topic</span>
+        <input id="q" type="search" placeholder="service account, secret, postgres…" autocomplete="off" />
+      </label>
+      <nav id="toc" aria-label="Chapters"></nav>
+    </aside>
+    <main id="main" tabindex="-1"></main>
+  </div>
+  <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false">Chapters</button>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script src="content.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

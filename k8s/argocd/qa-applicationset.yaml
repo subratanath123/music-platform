@@ -1,0 +1,67 @@
+# ==============================================================================
+# QA Environment Argo CD ApplicationSet (Git File Generator Pattern)
+#
+# Apply ONCE to the QA Argo CD instance:
+#   kubectl apply -n argocd -f k8s/argocd/qa-applicationset.yaml
+#
+# Automatically discovers every k8s/environments/qa/*.json file (qa01, qa02, ..., qa0n).
+# You never need to edit this file again — just add/edit JSON files in k8s/environments/qa/!
+# ==============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: music-platform-qa
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/YOUR_ORG/music-platform.git
+        revision: main
+        files:
+          - path: "k8s/environments/qa/*.json"
+
+  template:
+    metadata:
+      name: "music-platform-{{.context}}"
+      labels:
+        environment: qa
+        context: "{{.context}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/YOUR_ORG/music-platform.git
+        targetRevision: main
+        path: k8s/overlays/qa
+        kustomize:
+          images:
+            - "music-platform=qa/music-platform:{{.tag}}"
+          patches:
+            - target:
+                kind: ExternalSecret
+                name: music-platform-env
+              patch: |-
+                - op: replace
+                  path: /spec/dataFrom/0/extract/key
+                  value: music-platform-{{.context}}
+            - target:
+                kind: Ingress
+                name: music-platform
+              patch: |-
+                - op: replace
+                  path: /spec/tls/0/hosts/0
+                  value: {{.host}}
+                - op: replace
+                  path: /spec/rules/0/host
+                  value: {{.host}}
+      destination:
+        # In-cluster: deploys to the QA GKE cluster where this QA Argo CD runs
+        server: https://kubernetes.default.svc
+        namespace: "music-{{.context}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

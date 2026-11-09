@@ -1,0 +1,67 @@
+name: Docker Bake & Push (GitOps / Argo CD)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Image namespace tier (qa | pps | prod | all)"
+        required: true
+        default: "qa"
+        type: choice
+        options:
+          - qa
+          - pps
+          - prod
+          - all
+      tag:
+        description: "Image version tag (e.g. 0.1)"
+        required: true
+        default: "0.1"
+        type: string
+
+env:
+  DEFAULT_VERSION: "0.1"
+
+jobs:
+  build-and-push:
+    name: Build & Push Image via docker-build.sh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve target & tag
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TIER="${{ inputs.tier }}"
+            TAG="${{ inputs.tag }}"
+          else
+            # Any merge / push to main or master builds & pushes prod/music-platform:<TAG>
+            TIER="prod"
+            TAG="${DEFAULT_VERSION}"
+          fi
+          echo "tier=${TIER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Run docker-build.sh (Bake & Push)
+        run: |
+          chmod +x ./docker-build.sh
+          ./docker-build.sh \
+            --env "${{ steps.meta.outputs.tier }}" \
+            --tag "${{ steps.meta.outputs.tag }}" \
+            --registry "${{ vars.DOCKER_REGISTRY }}" \
+            --push
