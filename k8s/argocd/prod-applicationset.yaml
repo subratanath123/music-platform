@@ -17,7 +17,7 @@ spec:
   goTemplateOptions: ["missingkey=error"]
   generators:
     - git:
-        repoURL: https://github.com/YOUR_ORG/music-platform.git
+        repoURL: https://github.com/subratanath123/music-platform.git
         revision: main
         files:
           - path: "k8s/environments/prod/*.json"
@@ -31,7 +31,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/YOUR_ORG/music-platform.git
+        repoURL: https://github.com/subratanath123/music-platform.git
         targetRevision: main
         path: k8s/overlays/prod
         kustomize:

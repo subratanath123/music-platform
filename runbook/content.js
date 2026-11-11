@@ -19,7 +19,7 @@ window.BOOK = [
     missing: "You still have the YAML and K8S_DEPLOYMENT_PLAN.md. You lose the “if I delete this, what happens” trail.",
     search: "introduction readme start",
     files: ["runbook/index.html", "K8S_DEPLOYMENT_PLAN.md"],
-    body: "<p>The book has four shelves.</p><ul><li><strong>Theory</strong> is the mechanism. Read it once.</li><li><strong>Recipes</strong> are the commands, in the order a new cluster needs them.</li><li><strong>If it is missing</strong> is the symptom index. Start there when something is stuck.</li><li><strong>Why this one</strong> is the decision log, one table.</li></ul><p>Names in the YAML that are still placeholders, and must be replaced before a real cluster will sync:</p><ul><li>Git remote <code>https://github.com/YOUR_ORG/music-platform.git</code> in every ApplicationSet.</li><li>GKE cluster <code>surshongi-gke</code> in <code>asia-south1</code> inside the ClusterSecretStore. Those strings have to be the real cluster.</li><li>Google project <code>surshongi</code>. That one matches the project you already selected in Cloud Shell.</li></ul><p>Two worlds stay separate. Your laptop runs <code>npm run dev</code> and Postgres in Docker on <code>localhost:5432</code>. The cluster runs the same app from an image, and Postgres is a Service named <code>postgres</code>. The hostname in <code>DATABASE_URL</code> is different on purpose.</p>"
+    body: "<p>The book has four shelves.</p><ul><li><strong>Theory</strong> is the mechanism. Read it once.</li><li><strong>Recipes</strong> start at <strong>Deploy order</strong> and follow a new GKE cluster through the Argo CD install, the secret login, and the first sync.</li><li><strong>If it is missing</strong> is the symptom index. Start there when something is stuck.</li><li><strong>Why this one</strong> is the decision log, one table.</li></ul><p>Names in the YAML that are still placeholders, and must be replaced before a real cluster will sync:</p><ul><li>Git remote <code>https://github.com/YOUR_ORG/music-platform.git</code> in every ApplicationSet.</li><li>GKE cluster <code>surshongi-gke</code> in <code>asia-south1</code> inside the ClusterSecretStore. Those strings have to be the real cluster.</li><li>Google project <code>surshongi</code>. That one matches the project you already selected in Cloud Shell.</li></ul><p>Two worlds stay separate. Your laptop runs <code>npm run dev</code> and Postgres in Docker on <code>localhost:5432</code>. The cluster runs the same app from an image, and Postgres is a Service named <code>postgres</code>. The hostname in <code>DATABASE_URL</code> is different on purpose.</p>"
   },
   {
     id: "whole-picture",
@@ -495,12 +495,190 @@ window.BOOK = [
     body: "<pre><code>kubectl logs -n music-qa01 deploy/music-platform\nkubectl logs -n music-qa01 deploy/music-platform -c wait-for-postgres\nkubectl logs -n music-qa01 statefulset/postgres</code></pre><p>A CrashLoop prints the previous crash with <code>--previous</code>. CreateContainerConfigError has no logs, because the process never started. Describe the pod instead.</p>"
   },
   {
-    id: "before-gcp",
+    id: "deploy-order",
     group: "recipes",
     kicker: "Recipe · 24",
+    title: "Deploy order",
+    short: "From an empty cluster",
+    lede: "Install Argo CD first. It does not fetch secrets and it does not start the app by itself. The chapters after this one are the order to run on one GKE cluster.",
+    why: "Applying the ApplicationSet before Argo CD, the operator, and the Google secret exist produces a red sync with no pods and no useful logs.",
+    what: "The sequence for the QA cluster. Repeat it on the pps cluster and the prod cluster with those tiers’ files. Do not install prod’s Argo CD into the QA cluster.",
+    when: "Once, when the cluster is new. Later deploys are a JSON edit or a new secret version, not this list.",
+    where: "Cloud Shell, project surshongi. kubectl must be pointed at the cluster you mean before any apply.",
+    options: [],
+    chose: "One Argo CD inside each tier’s cluster, then External Secrets, then the Google secret, then the ApplicationSet. The app sync is the last apply, so the first sync can find music-platform-qa01.",
+    missing: "Skip a step and the next object waits. An ApplicationSet with no Argo CD does nothing. An ExternalSecret with no store stays SecretSyncedError. A Deployment with no Secret stays CreateContainerConfigError.",
+    search: "order install argocd first gke sequence",
+    files: ["k8s/argocd/qa-applicationset.yaml", "k8s/cluster/cluster-secret-store.yaml"],
+    body: "<ol><li><strong>Connect kubectl</strong> to the GKE cluster and confirm Workload Identity.</li><li><strong>Install Argo CD</strong> into namespace <code>argocd</code>.</li><li><strong>Open the UI</strong> and sign in as admin.</li><li><strong>Point git</strong> at <code>https://github.com/subratanath123/music-platform.git</code>.</li><li><strong>Install ingress-nginx and metrics-server</strong> so the Ingress and the HPA have something to talk to.</li><li><strong>Install External Secrets Operator.</strong></li><li><strong>Bind</strong> its service account to Google.</li><li><strong>Apply the ClusterSecretStore.</strong></li><li><strong>Create</strong> Secret Manager secret <code>music-platform-qa01</code>.</li><li><strong>Apply the QA ApplicationSet.</strong> Argo creates <code>music-platform-qa01</code> and syncs it.</li><li><strong>Watch the waves</strong> until <code>/api/health</code> answers.</li></ol><p>Argo CD’s job in that list is steps 2, 3, and 10. The secret fetch happens after step 10, and Argo does not perform it. The operator pod, using the binding from step 7, reads Google and writes Secret <code>music-platform-env</code>.</p>"
+  },
+  {
+    id: "gke-connect",
+    group: "recipes",
+    kicker: "Recipe · 25",
+    title: "Connect kubectl to GKE",
+    short: "The cluster",
+    summary: "This recipe connects your Cloud Shell to the right GKE cluster so that every kubectl command you run afterwards goes to that cluster.",
+    idea: "<p><code>kubectl</code> has no built-in idea of which cluster to talk to. It uses whatever cluster your saved credentials point at. If those credentials point at the wrong cluster, you’d install things (like Argo CD) in the wrong place. This recipe makes sure you’re pointed at the right one, and that Workload Identity is on.</p>",
+    stepsHeading: "What each command does",
+    steps: [
+      {
+        lang: "bash",
+        code: "gcloud config set project surshongi",
+        explain: "Tells Cloud Shell: “I’m working in the <code>surshongi</code> project.”"
+      },
+      {
+        lang: "bash",
+        code: "gcloud container clusters list",
+        explain: "Shows which clusters already exist in that project. Look at the <code>NAME</code> and <code>LOCATION</code> columns."
+      },
+      {
+        lang: "bash",
+        code: "gcloud container clusters get-credentials CLUSTER --region REGION --project surshongi",
+        explain: "Saves login details for that cluster so <code>kubectl</code> can reach it. Replace <code>CLUSTER</code> and <code>REGION</code> with the values from the list (use <code>--zone</code> instead of <code>--region</code> if the location has 3 parts like <code>asia-south1-a</code>)."
+      },
+      {
+        lang: "bash",
+        code: "kubectl get nodes",
+        explain: "A test. If it shows nodes, you’re connected."
+      },
+      {
+        lang: "bash",
+        code: "gcloud container clusters describe CLUSTER --region REGION \\\n  --format='value(workloadIdentityConfig.workloadPool)'",
+        explain: "Checks that Workload Identity is on. The answer should be <code>surshongi.svc.id.goog</code>. If it’s blank, Workload Identity is off, and the External Secrets setup won’t work."
+      },
+      {
+        label: "Only if the cluster list was empty",
+        lang: "bash",
+        code: "gcloud container clusters create surshongi-qa \\\n  --zone asia-south1-a \\\n  --workload-pool=surshongi.svc.id.goog \\\n  --machine-type=e2-small \\\n  --num-nodes=1",
+        explain: "Creates a small single-node QA cluster with Workload Identity enabled. Starts billing immediately."
+      }
+    ],
+    pathsHeading: "Two paths",
+    paths: [
+      { label: "A cluster already exists", text: "Use it. Don’t create a new one.", picked: true },
+      { label: "The list is empty", text: "Run the create command above to make one. This starts real machines (nodes), so it costs money from that moment." }
+    ],
+    editAfter: {
+      heading: "One edit afterwards",
+      text: "Open <code>k8s/cluster/cluster-secret-store.yaml</code> and make sure <code>clusterName</code> (currently <code>surshongi-qa</code>) and <code>clusterLocation</code> (currently <code>asia-south1-a</code>) match the exact cluster name and region/zone from the list, so the ClusterSecretStore points at the same cluster you just connected to."
+    },
+    whyMatters: [
+      { label: "Wrong cluster", text: "You could install QA’s Argo CD on production." },
+      { label: "Workload Identity off", text: "The keyless login fails, so no secrets can be fetched from GCP Secret Manager." }
+    ],
+    search: "gcloud get-credentials workload identity create cluster surshongi-qa",
+    files: ["k8s/cluster/cluster-secret-store.yaml"]
+  },
+  {
+    id: "install-argocd",
+    group: "recipes",
+    kicker: "Recipe · 26",
+    title: "Install Argo CD",
+    short: "Namespace argocd",
+    lede: "Install Argo CD into the cluster you just selected. This copy deploys only into this cluster, because its ApplicationSet uses https://kubernetes.default.svc.",
+    why: "The ApplicationSet is an Argo CD object. The Kubernetes API does not understand it until Argo CD’s controllers are running.",
+    what: "The upstream install manifest, namespace <code>argocd</code>. It starts the ApplicationSet controller and the Application controller.",
+    when: "Once per tier cluster, after kubectl get nodes succeeds.",
+    where: "Namespace <code>argocd</code> on that cluster. The QA install does not manage pps or prod.",
+    options: [
+      { name: "Upstream install.yaml", note: "What the Argo CD docs start with. No Helm required for this step.", picked: true },
+      { name: "Helm chart argo/argo-cd", note: "Easier to pin a version and upgrade. Same namespace, same result." },
+      { name: "One central Argo CD for every tier", note: "Then destination.server cannot stay kubernetes.default.svc. Each remote cluster has to be registered." }
+    ],
+    chose: "The upstream non-HA manifest, one install per tier. The first cluster to bring up is QA.",
+    missing: "kubectl apply of the ApplicationSet fails with “no matches for kind ApplicationSet”. No Application is generated, and no music-qa01 namespace appears.",
+    search: "kubectl apply argocd install.yaml namespace argocd",
+    files: ["k8s/argocd/qa-applicationset.yaml"],
+    body: "<pre><code>kubectl create namespace argocd\nkubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml\nkubectl rollout status deployment/argocd-server -n argocd\nkubectl get pods -n argocd</code></pre><p>Wait until <code>argocd-server</code> and <code>argocd-applicationset-controller</code> are Running. The ApplicationSet controller is the piece that turns each JSON file into an Application. The Application controller is the piece that applies the waves.</p><p>Helm, if you prefer it:</p><pre><code>helm repo add argo https://argoproj.github.io/argo-helm\nhelm install argocd argo/argo-cd --namespace argocd --create-namespace</code></pre>"
+  },
+  {
+    id: "open-argocd",
+    group: "recipes",
+    kicker: "Recipe · 27",
+    title: "Open the Argo CD UI",
+    short: "Admin password",
+    summary: "This recipe opens the Argo CD web dashboard from Google Cloud Shell so you can watch your apps sync.",
+    idea: "<p>By default, Argo CD has no public IP address. Cloud Shell’s Web Preview only speaks plain HTTP, so we switch Argo CD’s server into HTTP mode (<code>server.insecure=true</code>) and forward port <code>8080</code>.</p>",
+    stepsHeading: "What each command does",
+    steps: [
+      {
+        lang: "bash",
+        code: "kubectl patch configmap argocd-cmd-params-cm -n argocd \\\n  --type merge -p '{\"data\":{\"server.insecure\":\"true\"}}'\n\nkubectl rollout restart deployment argocd-server -n argocd\nkubectl rollout status deployment argocd-server -n argocd",
+        explain: "Tells Argo CD to serve plain HTTP on port 80 so Cloud Shell’s Web Preview won’t fail with “Unable to forward your request to a backend”."
+      },
+      {
+        lang: "bash",
+        code: "kubectl get secret argocd-initial-admin-secret -n argocd \\\n  -o jsonpath='{.data.password}' | base64 -d; echo",
+        explain: "Prints your initial password for the <code>admin</code> user. Copy it before starting port-forward."
+      },
+      {
+        lang: "bash",
+        code: "kubectl port-forward --address 0.0.0.0 svc/argocd-server -n argocd 8080:80",
+        explain: "Forwards port 8080 inside Cloud Shell to Argo CD. Keep this running, then click Web Preview → Preview on port 8080."
+      }
+    ],
+    pathsHeading: "Two paths",
+    paths: [
+      { label: "Port-forward + Cloud Shell Web Preview", text: "Free ($0) and keeps Argo CD off the public internet.", picked: true },
+      { label: "LoadBalancer Service", text: "Gives Argo CD a permanent public IP, but adds a small hourly GCP Load Balancer charge." }
+    ],
+    whyMatters: [
+      { label: "Stopping port-forward", text: "Only closes your browser preview — Argo CD itself keeps running inside the cluster." },
+      { label: "Skipping server.insecure", text: "Argo CD redirects HTTP to HTTPS, and Cloud Shell Web Preview shows “Couldn’t connect to a server on port 8080”." }
+    ],
+    search: "argocd-initial-admin-secret port-forward admin 8080 web preview",
+    files: ["k8s/argocd/qa-applicationset.yaml"]
+  },
+  {
+    id: "wire-git",
+    group: "recipes",
+    kicker: "Recipe · 28",
+    title: "Point Argo CD at the git repo",
+    short: "Replace YOUR_ORG",
+    lede: "The ApplicationSet files still say https://github.com/YOUR_ORG/music-platform.git. The real repo is https://github.com/subratanath123/music-platform.git. Argo can only clone a URL that exists.",
+    why: "The generator reads k8s/environments/qa/*.json from that remote, on branch main. A placeholder URL never lists qa01.",
+    what: "A find-and-replace in the three ApplicationSet files, committed and pushed. A repository credential only if the GitHub repo is private.",
+    when: "After Argo CD is running, before you apply the ApplicationSet.",
+    where: "Both <code>repoURL</code> fields in <code>k8s/argocd/qa-applicationset.yaml</code>, <code>pps-applicationset.yaml</code>, and <code>prod-applicationset.yaml</code>.",
+    options: [
+      { name: "Public repo, no credential", note: "Argo clones it anonymously. Open the GitHub URL in a private browser window. If the files are visible, no token is required.", picked: true },
+      { name: "Private repo, repository Secret", note: "A GitHub token stored in namespace argocd, labeled so Argo treats it as a repository credential." }
+    ],
+    chose: "Put the real URL in git. Add a token only when a private window cannot see the repository.",
+    missing: "Leave YOUR_ORG and the Application shows ComparisonError, unable to clone. The cluster stays empty. A private repo with the right URL and no token fails the same way.",
+    search: "YOUR_ORG repoURL subratanath123 repository secret",
+    files: ["k8s/argocd/qa-applicationset.yaml", "k8s/argocd/pps-applicationset.yaml", "k8s/argocd/prod-applicationset.yaml"],
+    body: "<p>In all three ApplicationSet files, both <code>repoURL</code> lines become:</p><pre><code>https://github.com/subratanath123/music-platform.git</code></pre><p>Commit and push to <code>main</code>. Argo’s <code>targetRevision</code> is <code>main</code>.</p><p>If the repo is private, create a fine-grained GitHub token with access to this repository’s contents, then:</p><pre><code>kubectl create secret generic music-platform-repo -n argocd \\\n  --from-literal=type=git \\\n  --from-literal=url=https://github.com/subratanath123/music-platform.git \\\n  --from-literal=username=subratanath123 \\\n  --from-literal=password=PASTE_THE_TOKEN\n\nkubectl label secret music-platform-repo -n argocd \\\n  argocd.argoproj.io/secret-type=repository</code></pre><p>Do not commit the token. Do not put it in the ApplicationSet.</p>"
+  },
+  {
+    id: "install-ingress",
+    group: "recipes",
+    kicker: "Recipe · 29",
+    title: "Install ingress and metrics",
+    short: "nginx and metrics-server",
+    lede: "The app Ingress asks for class nginx. The HPA asks for CPU and memory metrics. Neither controller is in this repo. Install them once on the cluster.",
+    why: "Argo can create the Ingress and the HPA objects, and they still do nothing if the controllers are absent.",
+    what: "ingress-nginx from its Helm chart, and metrics-server only if GKE did not already install it.",
+    when: "Once per cluster, before the first Application sync. The sync still succeeds without them. The hostname and the autoscaler do not.",
+    where: "Namespaces <code>ingress-nginx</code> and <code>kube-system</code>. Cluster add-ons, same as Argo CD and the secret store.",
+    options: [
+      { name: "ingress-nginx Helm chart", note: "Matches ingressClassName: nginx and the proxy-body-size annotation.", picked: true },
+      { name: "GKE’s built-in Ingress", note: "Would need a different Ingress class and different annotations than the ones in ingress.yaml." }
+    ],
+    chose: "ingress-nginx, because the manifest already names that class and sets a 120m upload body. Check for metrics-server before installing a second copy.",
+    missing: "No nginx: the Ingress object has no address. No metrics-server: the HPA stays at “unable to fetch metrics” and the Deployment keeps its spec replica count.",
+    search: "ingress-nginx metrics-server helm",
+    files: ["k8s/base/ingress.yaml", "k8s/base/hpa.yaml"],
+    body: "<pre><code>helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx\nhelm install ingress-nginx ingress-nginx/ingress-nginx \\\n  --namespace ingress-nginx --create-namespace\n\nkubectl get svc -n ingress-nginx\nkubectl get deployment metrics-server -n kube-system</code></pre><p>The Service should receive an external address. That address is where DNS for <code>qa01.surshongi.com</code> will point. metrics-server is already present on most GKE clusters. If the second command prints NotFound, install it:</p><pre><code>kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml</code></pre>"
+  },
+  {
+    id: "before-gcp",
+    group: "recipes",
+    kicker: "Recipe · 30",
     title: "Before you touch Google",
     short: "Checklist",
-    lede: "Confirm the cluster name, that Workload Identity is on, and that you are in project surshongi. Then replace the placeholders in git. The recipes after this one assume that is done.",
+    lede: "Stop here and check the earlier recipes. The operator binding fails in a way that looks like a secret bug when the cluster name in git is still the placeholder.",
     why: "The store file will happily sync with the placeholder cluster name <code>surshongi-gke</code>. Google will reject it, and the error looks like a secret problem.",
     what: "A short checklist. No new objects yet.",
     when: "Once per cluster, before the operator binding.",
@@ -510,12 +688,12 @@ window.BOOK = [
     missing: "Skip this and the later commands can succeed while pointed at the wrong project, or the store can point at a cluster name that does not exist.",
     search: "checklist gcloud PROJECT_ID placeholder",
     files: ["k8s/cluster/cluster-secret-store.yaml", "k8s/argocd/qa-applicationset.yaml"],
-    body: "<pre><code>echo \"$PROJECT_ID\"\ngcloud config set project surshongi\ngcloud container clusters list</code></pre><p>Write the real cluster name and region into the <code>workloadIdentity</code> block. Write the real git URL over <code>YOUR_ORG</code> in all three ApplicationSets. Commit those edits. Argo can only read a repo that exists.</p><p>Also confirm, outside this repo: Argo CD installed, External Secrets Operator installed, ingress-nginx installed, metrics-server present, Workload Identity enabled on the cluster.</p>"
+    body: "<pre><code>gcloud config get-value project\nkubectl get nodes\nkubectl get pods -n argocd\nkubectl get pods -n ingress-nginx</code></pre><p>Project must be <code>surshongi</code>. Nodes must be Ready. <code>argocd-server</code> must be Running. The three ApplicationSet files must already contain <code>https://github.com/subratanath123/music-platform.git</code>, and <code>cluster-secret-store.yaml</code> must name the cluster you just listed. Then continue with the operator install.</p>"
   },
   {
     id: "install-eso",
     group: "recipes",
-    kicker: "Recipe · 25",
+    kicker: "Recipe · 31",
     title: "Install External Secrets Operator",
     short: "The CRDs",
     lede: "The operator is a cluster add-on. Its chart creates the namespace and the Kubernetes service account that the store will name.",
@@ -536,7 +714,7 @@ window.BOOK = [
   {
     id: "bind-operator",
     group: "recipes",
-    kicker: "Recipe · 26",
+    kicker: "Recipe · 32",
     title: "Bind the operator to Google",
     short: "The login",
     lede: "Create the Google service account, let it read secrets, let the Kubernetes service account impersonate it, and annotate the Kubernetes service account.",
@@ -554,7 +732,7 @@ window.BOOK = [
   {
     id: "apply-store",
     group: "recipes",
-    kicker: "Recipe · 27",
+    kicker: "Recipe · 33",
     title: "Apply the ClusterSecretStore",
     short: "Once",
     lede: "The store is the object the ExternalSecret points at by name. Apply it yourself. Argo’s app sync does not include this file.",
@@ -567,12 +745,12 @@ window.BOOK = [
     missing: "ExternalSecrets sit at SecretSyncedError, store ref not found.",
     search: "kubectl apply cluster-secret-store",
     files: ["k8s/cluster/cluster-secret-store.yaml"],
-    body: "<pre><code>kubectl apply -f k8s/cluster/cluster-secret-store.yaml\nkubectl get clustersecretstore gcp-secret-manager\nkubectl describe clustersecretstore gcp-secret-manager</code></pre><p>Ready means the store object is valid. It does not mean a secret has been read yet. The first real test is an ExternalSecret in a namespace.</p><p>Then apply the ApplicationSet once:</p><pre><code>kubectl apply -n argocd -f k8s/argocd/qa-applicationset.yaml</code></pre><p>Repeat with the pps and prod files on those clusters, not on the QA cluster.</p>"
+    body: "<pre><code>kubectl apply -f k8s/cluster/cluster-secret-store.yaml\nkubectl get clustersecretstore gcp-secret-manager\nkubectl describe clustersecretstore gcp-secret-manager</code></pre><p>Ready means the store object is valid. It does not mean a secret has been read yet. Leave the ApplicationSet for the next recipes: create <code>music-platform-qa01</code> first, then apply the set, so the first sync finds the JSON.</p>"
   },
   {
     id: "create-secret",
     group: "recipes",
-    kicker: "Recipe · 28",
+    kicker: "Recipe · 34",
     title: "Create the first context secret",
     short: "music-platform-qa01",
     lede: "Make a JSON file on your machine, create the Secret Manager secret, add the file as version 1. Do not commit the file.",
@@ -585,12 +763,33 @@ window.BOOK = [
     missing: "The namespace can still be created by Argo. The pods will not start. Status on the ExternalSecret is the place to look, not the app logs.",
     search: "gcloud secrets create versions add json",
     files: ["k8s/base/externalsecret.yaml"],
-    body: "<p>In Cloud Shell:</p><pre><code>cat &gt; qa01.env.json &lt;&lt;'EOF'\n{\n  \"DATABASE_URL\": \"postgresql://surshongi:CHOOSE_A_PASSWORD@postgres:5432/surshongi_db\",\n  \"POSTGRES_USER\": \"surshongi\",\n  \"POSTGRES_PASSWORD\": \"CHOOSE_A_PASSWORD\",\n  \"POSTGRES_DB\": \"surshongi_db\",\n  \"SESSION_SECRET\": \"paste-a-long-random-string\",\n  \"NEXT_PUBLIC_SITE_URL\": \"https://qa01.surshongi.com\"\n}\nEOF\n\ngcloud secrets create music-platform-qa01 --replication-policy=automatic\ngcloud secrets versions add music-platform-qa01 --data-file=qa01.env.json\nrm qa01.env.json</code></pre><p>Repeat with a different password and a different <code>NEXT_PUBLIC_SITE_URL</code> for qa02, pps01, and prod01. The host in the URL has to be the host in that context’s JSON file, because Google SSO will reject a redirect that does not match.</p><p>Watch the copy land:</p><pre><code>kubectl get externalsecret -n music-qa01\nkubectl get secret music-platform-env -n music-qa01</code></pre>"
+    body: "<p>In Cloud Shell:</p><pre><code>cat &gt; qa01.env.json &lt;&lt;'EOF'\n{\n  \"DATABASE_URL\": \"postgresql://surshongi:CHOOSE_A_PASSWORD@postgres:5432/surshongi_db\",\n  \"POSTGRES_USER\": \"surshongi\",\n  \"POSTGRES_PASSWORD\": \"CHOOSE_A_PASSWORD\",\n  \"POSTGRES_DB\": \"surshongi_db\",\n  \"SESSION_SECRET\": \"paste-a-long-random-string\",\n  \"NEXT_PUBLIC_SITE_URL\": \"https://qa01.surshongi.com\"\n}\nEOF\n\ngcloud secrets create music-platform-qa01 --replication-policy=automatic\ngcloud secrets versions add music-platform-qa01 --data-file=qa01.env.json\nrm qa01.env.json</code></pre><p>Repeat with a different password and a different <code>NEXT_PUBLIC_SITE_URL</code> for qa02, pps01, and prod01. The host in the URL has to be the host in that context’s JSON file, because Google SSO will reject a redirect that does not match.</p><p>The Kubernetes Secret does not exist until the ApplicationSet syncs. Confirm the Google side now:</p><pre><code>gcloud secrets versions access latest --secret=music-platform-qa01</code></pre><p>That prints the JSON. It is the proof the name the ExternalSecret will request actually exists.</p>"
+  },
+  {
+    id: "apply-appset",
+    group: "recipes",
+    kicker: "Recipe · 35",
+    title: "Apply the ApplicationSet",
+    short: "The first sync",
+    lede: "This is the step that makes Argo CD deploy the app. Apply the QA set once. It discovers qa01.json and qa02.json and creates one Application each.",
+    why: "Until this object exists, Argo CD is installed and idle. It is not watching the repo for this app.",
+    what: "One kubectl apply of k8s/argocd/qa-applicationset.yaml into namespace argocd.",
+    when: "After the ClusterSecretStore is Ready and music-platform-qa01 exists in Secret Manager. The git URL in the file must already be the real repository.",
+    where: "Namespace argocd on the QA cluster only. The pps and prod files are applied later, on their own clusters.",
+    options: [
+      { name: "Apply the set and let automated sync run", note: "prune and selfHeal are already in the file. Argo deploys qa01 and qa02 without a second command.", picked: true },
+      { name: "Manual sync in the UI", note: "Only if you remove the automated block. This file does not ask for a button click." }
+    ],
+    chose: "Apply the QA file and watch the UI. Argo creates Application music-platform-qa01, namespace music-qa01, then the waves: service account and ExternalSecret, Postgres, the app, then Ingress and HPA.",
+    missing: "No ApplicationSet: the UI stays empty. YOUR_ORG still in the file: ComparisonError, clone failed. Secret missing: the Application exists, the ExternalSecret is NotFound, and the pods wait.",
+    search: "kubectl apply applicationset first sync qa",
+    files: ["k8s/argocd/qa-applicationset.yaml", "k8s/environments/qa/qa01.json"],
+    body: "<pre><code>kubectl apply -n argocd -f k8s/argocd/qa-applicationset.yaml\n\nkubectl get applicationsets -n argocd\nkubectl get applications -n argocd\nkubectl get pods -n music-qa01</code></pre><p>You should see Applications <code>music-platform-qa01</code> and <code>music-platform-qa02</code>. Open the UI. Each Application shows the git commit and the rendered image <code>qa/music-platform:0.1</code>.</p><p>What Argo does on that sync, in order:</p><ol><li>Reads <code>k8s/environments/qa/qa01.json</code> from GitHub.</li><li>Renders <code>k8s/overlays/qa</code> and writes the secret name <code>music-platform-qa01</code> and the host <code>qa01.surshongi.com</code>.</li><li>Wave -2: ServiceAccount and ExternalSecret. The operator, not Argo, calls Secret Manager and writes Secret <code>music-platform-env</code>. No password is in the git file.</li><li>Wave -1: Postgres, which stays unready until that Secret has the Postgres keys.</li><li>Wave 0: the app Deployment. The init container waits until <code>postgres:5432</code> accepts a connection, then Node starts with <code>envFrom</code>.</li><li>Wave 1: Ingress and HPA.</li></ol><p>Repeat the apply with <code>pps-applicationset.yaml</code> or <code>prod-applicationset.yaml</code> only on that tier’s cluster, after that cluster has its own Argo CD, store, and secret.</p>"
   },
   {
     id: "update-secret",
     group: "recipes",
-    kicker: "Recipe · 29",
+    kicker: "Recipe · 36",
     title: "Update a secret",
     short: "New version, then restart",
     lede: "You add a version. You do not edit the old one. The operator notices within five minutes. The pod notices only when it is recreated.",
@@ -611,7 +810,7 @@ window.BOOK = [
   {
     id: "add-context",
     group: "recipes",
-    kicker: "Recipe · 30",
+    kicker: "Recipe · 37",
     title: "Add qa03",
     short: "A JSON file",
     lede: "A new context is a new JSON file plus a new Google secret. You do not edit the ApplicationSet.",
@@ -629,7 +828,7 @@ window.BOOK = [
   {
     id: "ship-tag",
     group: "recipes",
-    kicker: "Recipe · 31",
+    kicker: "Recipe · 38",
     title: "Ship a new image",
     short: "Build, then change the tag",
     lede: "Build and push with docker-build.sh or let main push prod. Then change the tag in the context JSON. Argo rolls the Deployment. Reusing 0.1 will not refresh a node that already has 0.1.",
@@ -647,7 +846,7 @@ window.BOOK = [
   {
     id: "check-order",
     group: "recipes",
-    kicker: "Recipe · 32",
+    kicker: "Recipe · 39",
     title: "See that startup order held",
     short: "Waves and the init",
     lede: "After a fresh sync, the Secret exists before Postgres is Ready, and the app pod spends time in Init before it is Running.",
@@ -665,7 +864,7 @@ window.BOOK = [
   {
     id: "read-logs",
     group: "recipes",
-    kicker: "Recipe · 33",
+    kicker: "Recipe · 40",
     title: "Read logs",
     short: "kubectl and Cloud Logging",
     lede: "App logs, init logs, and Postgres logs are three containers. Pick the container or you will read the wrong one.",
@@ -683,7 +882,7 @@ window.BOOK = [
   {
     id: "refresh-secret",
     group: "recipes",
-    kicker: "Recipe · 34",
+    kicker: "Recipe · 41",
     title: "Force a secret refresh",
     short: "Do not wait five minutes",
     lede: "Annotate the ExternalSecret with a new force-sync value. The operator reconciles, rewrites the Kubernetes Secret, and leaves the pods alone until you restart them.",
@@ -701,7 +900,7 @@ window.BOOK = [
   {
     id: "failure-catalog",
     group: "trouble",
-    kicker: "If it is missing · 35",
+    kicker: "If it is missing · 42",
     title: "Symptom to cause",
     short: "What the error means",
     lede: "Match the status line, then change the one object that owns that hop. Most secret failures never reach the app logs.",
@@ -719,7 +918,7 @@ window.BOOK = [
   {
     id: "choice-log",
     group: "choices",
-    kicker: "Why this one · 36",
+    kicker: "Why this one · 43",
     title: "The decision log",
     short: "One table",
     lede: "Every choice in the manifests, the option we did not take, and the reason. When you reverse one, change this page in the same commit so the book stays true.",
